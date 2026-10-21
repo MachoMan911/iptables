@@ -1,0 +1,21 @@
+# macOS / IDE
+.DS_Store
+.idea/
+.vscode/
+
+# Node / Frontend dependencies
+frontend/node_modules/
+
+# Go compiled binaries & local runtime data
+backend/wallfacer-backend
+backend/wallfacer-backend-*
+backend/local_store.json
+*.log
+
+# Legacy prototype files
+.venv/
+/app/
+/requirements.txt
+/run.py
+/config.yaml
+local_preview.db
