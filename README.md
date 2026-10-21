@@ -31,7 +31,8 @@
 
 ```text
 iptables-forwarder/
-├── deploy.sh                        # 一键编译、安装、更新、解锁与运维脚本
+├── deploy.sh                        # 面壁者转发一键编译、安装、更新、解锁与运维脚本
+├── deploy_mysql84.sh                # MySQL 8.4 LTS 一键自动化部署脚本（自动生成并输出账号密码）
 ├── init.sql                         # 支持任意自定义数据库名的 MySQL 初始化建表脚本
 ├── README.md                        # 项目说明、一键部署、编译、配置与 Nginx 部署文档
 ├── backend/                         # Go 后端工程
@@ -113,6 +114,35 @@ sudo ./deploy.sh logs
 sudo ./deploy.sh restart
 sudo ./deploy.sh stop
 sudo ./deploy.sh uninstall
+```
+
+### 4. MySQL 8.4 LTS 一键自动化部署脚本 (`deploy_mysql84.sh`)
+
+若服务器尚未安装 MySQL，可使用配套的 [`deploy_mysql84.sh`](./deploy_mysql84.sh) 一键部署 **MySQL 8.4 LTS**（支持 **Linux 原生系统安装** 与 **Docker 容器化安装** 两种模式），自动初始化数据库与 [`init.sql`](./init.sql) 表结构、自动将账号密码同步至 `config.yaml`，并在**部署完成时高亮输出 Root 账号密码与业务账号密码**：
+
+```bash
+chmod +x deploy_mysql84.sh
+
+# 1. 全自动一键部署 MySQL 8.4 LTS（自动生成 16 位强随机密码，完成后直接输出账号密码）
+sudo ./deploy_mysql84.sh -y
+
+# 2. 指定 Docker 模式一键部署 MySQL 8.4 LTS
+sudo ./deploy_mysql84.sh install -y --mode docker
+
+# 3. 自定义数据库名、用户名与密码一键部署
+sudo ./deploy_mysql84.sh install -y \
+  --db-name wallfacer_forwarder \
+  --db-user wallfacer \
+  --db-pass 'Wallfacer@2026!'
+
+# 4. 随时重新查看部署生成的 MySQL 8.4 账号与密码
+./deploy_mysql84.sh credentials
+
+# 5. 一键重置业务账号密码并输出新密码
+sudo ./deploy_mysql84.sh reset-password
+
+# 6. 也可在执行 deploy.sh 时附加 --with-mysql84 参数，连同 MySQL 8.4 与转发服务一次性全套部署
+sudo ./deploy.sh install -y --with-mysql84
 ```
 
 ---

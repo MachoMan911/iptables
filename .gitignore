@@ -10,6 +10,7 @@ frontend/node_modules/
 backend/wallfacer-backend
 backend/wallfacer-backend-*
 backend/local_store.json
+.mysql84_credentials
 *.log
 
 # Legacy prototype files

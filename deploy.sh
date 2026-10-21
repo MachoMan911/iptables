@@ -25,6 +25,14 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="${PROJECT_ROOT}/backend"
 FRONTEND_DIR="${PROJECT_ROOT}/frontend"
 
+# 若已执行过 deploy_mysql84.sh，自动加载其生成的 MySQL 8.4 凭据作为默认值
+if [[ -f "${PROJECT_ROOT}/.mysql84_credentials" ]]; then
+    # shellcheck disable=SC1091
+    source "${PROJECT_ROOT}/.mysql84_credentials"
+    MYSQL_USER="${MYSQL_USER:-${MYSQL_APP_USER:-root}}"
+    MYSQL_PASSWORD="${MYSQL_PASSWORD:-${MYSQL_APP_PASSWORD:-your_mysql_password}}"
+fi
+
 # 默认部署参数（可通过环境变量或命令行参数覆盖）
 INSTALL_DIR="${INSTALL_DIR:-/opt/wallfacer}"
 SERVICE_NAME="${SERVICE_NAME:-wallfacer}"
@@ -39,6 +47,7 @@ ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-Admin@2026!}"
 DNS_INTERVAL="${DNS_INTERVAL:-60}"
 NGINX_DOMAIN="${NGINX_DOMAIN:-}"
+WITH_MYSQL84="${WITH_MYSQL84:-false}"
 NON_INTERACTIVE="${NON_INTERACTIVE:-false}"
 
 info()    { echo -e "${BLUE}[INFO]${NC} $*"; }
@@ -100,6 +109,7 @@ usage() {
   --admin-user <username>     初始管理员账号 (默认: admin)
   --admin-pass <password>     初始管理员密码 (默认: Admin@2026!，需满足等保三级强口令)
   --nginx-domain <domain/ip>  自动生成 Nginx 站点配置并指向该域名或服务器 IP
+  --with-mysql84              部署前自动调用 deploy_mysql84.sh 一键部署 MySQL 8.4 LTS
   -h, --help                  显示此帮助说明
 
 示例:
@@ -146,6 +156,7 @@ while [[ $# -gt 0 ]]; do
         --admin-user)       ADMIN_USER="$2"; shift 2 ;;
         --admin-pass)       ADMIN_PASSWORD="$2"; shift 2 ;;
         --nginx-domain)     NGINX_DOMAIN="$2"; shift 2 ;;
+        --with-mysql84)     WITH_MYSQL84="true"; shift ;;
         -h|--help)          usage; exit 0 ;;
         *)                  error "未知参数: $1 (使用 --help 查看帮助)" ;;
     esac
@@ -425,6 +436,16 @@ case "${COMMAND}" in
         if [[ "${OS_TYPE}" == "linux" ]] && [[ "${EUID}" -ne 0 ]]; then
             error "在 Linux 上安装并配置 iptables / systemd 需要 root 权限，请使用: sudo ./deploy.sh"
         fi
+        if [[ "${WITH_MYSQL84}" == "true" ]] && [[ -f "${PROJECT_ROOT}/deploy_mysql84.sh" ]]; then
+            info "正在调用 deploy_mysql84.sh 一键部署 MySQL 8.4 LTS..."
+            bash "${PROJECT_ROOT}/deploy_mysql84.sh" install -y --db-name "${MYSQL_DATABASE}"
+            if [[ -f "${PROJECT_ROOT}/.mysql84_credentials" ]]; then
+                # shellcheck disable=SC1091
+                source "${PROJECT_ROOT}/.mysql84_credentials"
+                MYSQL_USER="${MYSQL_APP_USER}"
+                MYSQL_PASSWORD="${MYSQL_APP_PASSWORD}"
+            fi
+        fi
         prompt_config
         build_frontend
         build_backend "${OS_TYPE}" "${ARCH_TYPE}" "${BACKEND_DIR}/wallfacer-backend"
@@ -466,6 +487,8 @@ case "${COMMAND}" in
             echo -e "  - 访问地址:     ${CYAN}http://<服务器IP>:${SERVER_PORT}${NC}"
         fi
         echo -e "  - 管理员账号:   ${CYAN}${ADMIN_USER}${NC}"
+        echo -e "  - 管理员密码:   ${CYAN}${ADMIN_PASSWORD}${NC}"
+        echo -e "  - MySQL 账号:   ${CYAN}${MYSQL_USER}${NC} (端口 ${MYSQL_HOST}:${MYSQL_PORT})"
         echo -e "  - 重启清零锁定: ${YELLOW}sudo ./deploy.sh unlock${NC} (或 sudo systemctl restart ${SERVICE_NAME})"
         echo -e "${GREEN}===========================================================================${NC}"
         ;;
