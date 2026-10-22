@@ -586,8 +586,8 @@ func (m *Manager) SampleTraffic() {
 	}
 	m.lastHostNetBytes = [2]int64{curOut, curIn}
 
-	m.HostUpSpeed = float64(hostDeltaUp) / dt
-	m.HostDownSpeed = float64(hostDeltaDown) / dt
+	m.HostUpSpeed = float64(int64(float64(hostDeltaUp)/dt*100+0.5)) / 100
+	m.HostDownSpeed = float64(int64(float64(hostDeltaDown)/dt*100+0.5)) / 100
 	m.HostUpBytes += hostDeltaUp
 	m.HostDownBytes += hostDeltaDown
 
@@ -627,8 +627,8 @@ func (m *Manager) SampleTraffic() {
 		}
 
 		m.ruleSpeeds[r.ID] = [2]float64{
-			float64(dUp) / dt,
-			float64(dDown) / dt,
+			float64(int64(float64(dUp)/dt*100+0.5)) / 100,
+			float64(int64(float64(dDown)/dt*100+0.5)) / 100,
 		}
 		if dUp > 0 || dDown > 0 {
 			deltas[r.ID] = [2]int64{dUp, dDown}

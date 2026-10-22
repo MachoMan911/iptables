@@ -517,7 +517,9 @@ function formatTime(isoStr) {
 
 function formatBytes(bytes) {
   const b = Number(bytes || 0);
-  if (b < 1024) return b + " B";
+  if (b < 1024) {
+    return (Number.isInteger(b) ? b : b.toFixed(2)) + " B";
+  }
   const units = ["KB", "MB", "GB", "TB"];
   let val = b / 1024;
   let idx = 0;
@@ -529,7 +531,11 @@ function formatBytes(bytes) {
 }
 
 function formatSpeed(bytesPerSec) {
-  return formatBytes(bytesPerSec) + "/s";
+  const b = Number(bytesPerSec || 0);
+  if (b < 1024) {
+    return b.toFixed(2) + " B/s";
+  }
+  return formatBytes(b) + "/s";
 }
 
 async function handleLogin() {
