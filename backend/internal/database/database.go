@@ -6,18 +6,37 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 
 	"wallfacer-forwarder/internal/auth"
 	"wallfacer-forwarder/internal/config"
 	"wallfacer-forwarder/internal/model"
 )
+
+// buildMySQLDSN 使用官方 mysql.Config 构造 DSN，避免 url.QueryEscape 将密码中的 @、# 等特殊字符转义成 %40、%23 导致认证失败
+func buildMySQLDSN(cfg config.MySQLConfig, dbName string, timeout time.Duration) string {
+	mc := mysql.NewConfig()
+	mc.User = cfg.User
+	mc.Passwd = cfg.Password
+	mc.Net = "tcp"
+	mc.Addr = fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
+	mc.DBName = dbName
+	mc.Timeout = timeout
+	mc.ReadTimeout = 10 * time.Second
+	mc.WriteTimeout = 10 * time.Second
+	mc.ParseTime = true
+	mc.Loc = time.Local
+	mc.AllowNativePasswords = true
+	if cfg.Charset != "" {
+		mc.Params = map[string]string{"charset": cfg.Charset}
+	}
+	return mc.FormatDSN()
+}
 
 type Store struct {
 	mu           sync.RWMutex
@@ -72,15 +91,7 @@ func (s *Store) initLocked() error {
 	}
 
 	// 1. 尝试连接 MySQL 实例并自动创建自定义名称的数据库
-	rootDSN := fmt.Sprintf(
-		"%s:%s@tcp(%s:%d)/?charset=%s&timeout=3s&parseTime=true&loc=Local",
-		url.QueryEscape(cfg.User),
-		url.QueryEscape(cfg.Password),
-		cfg.Host,
-		cfg.Port,
-		cfg.Charset,
-	)
-
+	rootDSN := buildMySQLDSN(cfg, "", 3*time.Second)
 	if rootDB, err := sql.Open("mysql", rootDSN); err == nil {
 		if pingErr := rootDB.Ping(); pingErr == nil {
 			createSQL := fmt.Sprintf(
@@ -88,35 +99,31 @@ func (s *Store) initLocked() error {
 				cfg.Database, cfg.Charset, cfg.Charset,
 			)
 			_, _ = rootDB.Exec(createSQL)
-			_ = rootDB.Close()
-
-			// 2. 连接至自定义数据库并自动初始化表结构
-			dbDSN := fmt.Sprintf(
-				"%s:%s@tcp(%s:%d)/%s?charset=%s&timeout=5s&parseTime=true&loc=Local",
-				url.QueryEscape(cfg.User),
-				url.QueryEscape(cfg.Password),
-				cfg.Host,
-				cfg.Port,
-				cfg.Database,
-				cfg.Charset,
-			)
-			if conn, err := sql.Open("mysql", dbDSN); err == nil {
-				conn.SetMaxOpenConns(20)
-				conn.SetMaxIdleConns(10)
-				conn.SetConnMaxLifetime(time.Hour)
-				if err := conn.Ping(); err == nil {
-					s.db = conn
-					s.isMySQL = true
-					s.activeMode = fmt.Sprintf("MySQL (%s:%d/%s)", cfg.Host, cfg.Port, cfg.Database)
-					if err := s.migrateMySQLTables(); err != nil {
-						return err
-					}
-					log.Printf("已成功连接 MySQL 自定义数据库 [%s] 并完成表结构初始化", cfg.Database)
-					return nil
-				}
-			}
 		} else {
-			_ = rootDB.Close()
+			log.Printf("MySQL 实例连接提示 (%s:%d): %v", cfg.Host, cfg.Port, pingErr)
+		}
+		_ = rootDB.Close()
+	}
+
+	// 2. 直接连接至自定义数据库并自动初始化表结构（兼容仅授权单库权限的业务账号）
+	dbDSN := buildMySQLDSN(cfg, cfg.Database, 5*time.Second)
+	if conn, err := sql.Open("mysql", dbDSN); err == nil {
+		conn.SetMaxOpenConns(20)
+		conn.SetMaxIdleConns(10)
+		conn.SetConnMaxLifetime(time.Hour)
+		if err := conn.Ping(); err == nil {
+			s.db = conn
+			s.isMySQL = true
+			s.activeMode = fmt.Sprintf("MySQL (%s:%d/%s)", cfg.Host, cfg.Port, cfg.Database)
+			if err := s.migrateMySQLTables(); err != nil {
+				log.Printf("MySQL 表结构初始化失败: %v", err)
+				return err
+			}
+			log.Printf("已成功连接 MySQL 自定义数据库 [%s] 并完成表结构初始化", cfg.Database)
+			return nil
+		} else {
+			log.Printf("连接自定义数据库 [%s] 失败: %v", cfg.Database, err)
+			_ = conn.Close()
 		}
 	}
 
@@ -257,46 +264,27 @@ func (s *Store) TestConnection() (bool, int64, string) {
 		return false, 0, "配置文件中的数据库名格式不合法"
 	}
 
-	rootDSN := fmt.Sprintf(
-		"%s:%s@tcp(%s:%d)/?charset=%s&timeout=3s&parseTime=true&loc=Local",
-		url.QueryEscape(cfg.User),
-		url.QueryEscape(cfg.Password),
-		cfg.Host,
-		cfg.Port,
-		cfg.Charset,
-	)
+	rootDSN := buildMySQLDSN(cfg, "", 3*time.Second)
+	if rootDB, err := sql.Open("mysql", rootDSN); err == nil {
+		if err := rootDB.Ping(); err == nil {
+			createSQL := fmt.Sprintf(
+				"CREATE DATABASE IF NOT EXISTS `%s` DEFAULT CHARACTER SET %s COLLATE %s_unicode_ci;",
+				cfg.Database, cfg.Charset, cfg.Charset,
+			)
+			_, _ = rootDB.Exec(createSQL)
+		}
+		_ = rootDB.Close()
+	}
 
-	rootDB, err := sql.Open("mysql", rootDSN)
+	dbDSN := buildMySQLDSN(cfg, cfg.Database, 5*time.Second)
+	conn, err := sql.Open("mysql", dbDSN)
 	if err != nil {
 		return false, time.Since(start).Milliseconds(), "数据库连接失败（驱动初始化异常）"
 	}
-	if err := rootDB.Ping(); err != nil {
-		_ = rootDB.Close()
-		return false, time.Since(start).Milliseconds(), "数据库连接测试未通过：无法连接至配置文件指定的 MySQL 服务（当前使用本地存储回退）"
-	}
-	createSQL := fmt.Sprintf(
-		"CREATE DATABASE IF NOT EXISTS `%s` DEFAULT CHARACTER SET %s COLLATE %s_unicode_ci;",
-		cfg.Database, cfg.Charset, cfg.Charset,
-	)
-	_, _ = rootDB.Exec(createSQL)
-	_ = rootDB.Close()
-
-	dbDSN := fmt.Sprintf(
-		"%s:%s@tcp(%s:%d)/%s?charset=%s&timeout=5s&parseTime=true&loc=Local",
-		url.QueryEscape(cfg.User),
-		url.QueryEscape(cfg.Password),
-		cfg.Host,
-		cfg.Port,
-		cfg.Database,
-		cfg.Charset,
-	)
-	conn, err := sql.Open("mysql", dbDSN)
-	if err != nil {
-		return false, time.Since(start).Milliseconds(), "数据库连接测试未通过"
-	}
 	if err := conn.Ping(); err != nil {
 		_ = conn.Close()
-		return false, time.Since(start).Milliseconds(), "数据库连接测试未通过"
+		log.Printf("测试数据库连接未通过: %v", err)
+		return false, time.Since(start).Milliseconds(), "数据库连接测试未通过：无法连接至配置文件指定的 MySQL 服务（当前使用本地存储回退）"
 	}
 	latency := time.Since(start).Milliseconds()
 
@@ -309,6 +297,7 @@ func (s *Store) TestConnection() (bool, int64, string) {
 	conn.SetConnMaxLifetime(time.Hour)
 	s.db = conn
 	s.isMySQL = true
+	s.activeMode = fmt.Sprintf("MySQL (%s:%d/%s)", cfg.Host, cfg.Port, cfg.Database)
 	_ = s.migrateMySQLTables()
 	s.mu.Unlock()
 

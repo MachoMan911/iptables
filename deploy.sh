@@ -578,6 +578,14 @@ case "${COMMAND}" in
             write_config_file "${INSTALL_DIR}/config.yaml"
         fi
 
+        if command -v mysql >/dev/null 2>&1 && [[ -f "${PROJECT_ROOT}/init.sql" ]]; then
+            if mysql -h "${MYSQL_HOST}" -P "${MYSQL_PORT}" -u"${MYSQL_USER}" -p"${MYSQL_PASSWORD}" \
+                -e "CREATE DATABASE IF NOT EXISTS \`${MYSQL_DATABASE}\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" >/dev/null 2>&1; then
+                mysql -h "${MYSQL_HOST}" -P "${MYSQL_PORT}" -u"${MYSQL_USER}" -p"${MYSQL_PASSWORD}" "${MYSQL_DATABASE}" < "${PROJECT_ROOT}/init.sql" >/dev/null 2>&1 || true
+                success "已向 MySQL 数据库 [${MYSQL_DATABASE}] 初始化表结构 (init.sql)"
+            fi
+        fi
+
         enable_linux_ip_forward
         setup_service
         setup_nginx
