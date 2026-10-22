@@ -60,6 +60,17 @@ NC='\033[0m'
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="${PROJECT_ROOT}/backend"
 FRONTEND_DIR="${PROJECT_ROOT}/frontend"
+DEPLOY_ENV_FILE="${PROJECT_ROOT}/.deploy_env"
+CLI_DIR_SET="false"
+
+# 若已记录过上次部署目录，优先读取作为默认 INSTALL_DIR
+if [[ -f "${DEPLOY_ENV_FILE}" ]]; then
+    # shellcheck disable=SC1090
+    source "${DEPLOY_ENV_FILE}"
+    if [[ -n "${SAVED_INSTALL_DIR:-}" ]]; then
+        INSTALL_DIR="${INSTALL_DIR:-${SAVED_INSTALL_DIR}}"
+    fi
+fi
 
 # 若已执行过 deploy_mysql84.sh，自动加载其生成的 MySQL 8.4 凭据作为默认值
 if [[ -f "${PROJECT_ROOT}/.mysql84_credentials" ]]; then
@@ -182,7 +193,7 @@ fi
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -y|--yes)           NON_INTERACTIVE="true"; shift ;;
-        --dir)              INSTALL_DIR="$2"; shift 2 ;;
+        --dir)              INSTALL_DIR="$2"; CLI_DIR_SET="true"; shift 2 ;;
         --port)             SERVER_PORT="$2"; shift 2 ;;
         --db-host)          MYSQL_HOST="$2"; shift 2 ;;
         --db-port)          MYSQL_PORT="$2"; shift 2 ;;
@@ -197,6 +208,58 @@ while [[ $# -gt 0 ]]; do
         *)                  error "未知参数: $1 (使用 --help 查看帮助)" ;;
     esac
 done
+
+# 自动探测已部署的真实安装目录（解决执行 sudo ./deploy.sh update 未传 --dir 时误回退到默认 /opt/wallfacer 导致丢失原 config.yaml 的问题）
+resolve_existing_install_dir() {
+    if [[ "${CLI_DIR_SET}" == "true" ]]; then
+        return 0
+    fi
+    # 1. 若当前 INSTALL_DIR 下已存在 config.yaml，直接使用
+    if [[ -f "${INSTALL_DIR}/config.yaml" ]]; then
+        return 0
+    fi
+    # 2. 从 systemd 服务文件中提取 WorkingDirectory
+    local svc_file="/etc/systemd/system/${SERVICE_NAME}.service"
+    if [[ -f "${svc_file}" ]]; then
+        local wd
+        wd="$(grep -E '^WorkingDirectory=' "${svc_file}" | head -n 1 | cut -d'=' -f2- | tr -d '[:space:]' || true)"
+        if [[ -n "${wd}" ]] && [[ -f "${wd}/config.yaml" ]]; then
+            INSTALL_DIR="${wd}"
+            return 0
+        fi
+    fi
+    # 3. 从 Nginx 配置文件中反推安装目录 (root <INSTALL_DIR>/frontend/dist;)
+    for ng_cfg in /etc/nginx/conf.d/wallfacer.conf /etc/nginx/sites-enabled/wallfacer.conf; do
+        if [[ -f "${ng_cfg}" ]]; then
+            local ng_dir
+            ng_dir="$(awk '/root .*\/frontend\/dist;/{print $2}' "${ng_cfg}" | sed 's|/frontend/dist;||' | head -n 1 || true)"
+            if [[ -n "${ng_dir}" ]] && [[ -f "${ng_dir}/config.yaml" ]]; then
+                INSTALL_DIR="${ng_dir}"
+                return 0
+            fi
+        fi
+    done
+    # 4. 扫描常见自定义安装路径（如 /wwww/wallfacer、/www/wallfacer、/opt/wallfacer）
+    for cand in /wwww/wallfacer /www/wallfacer /opt/wallfacer /home/wallfacer /usr/local/wallfacer; do
+        if [[ -f "${cand}/config.yaml" ]]; then
+            INSTALL_DIR="${cand}"
+            return 0
+        fi
+    done
+    local found_cfg
+    found_cfg="$(find / -maxdepth 3 -path "*/wallfacer/config.yaml" 2>/dev/null | head -n 1 || true)"
+    if [[ -n "${found_cfg}" ]]; then
+        INSTALL_DIR="$(dirname "${found_cfg}")"
+        return 0
+    fi
+}
+
+save_deploy_env() {
+    cat > "${DEPLOY_ENV_FILE}" <<EOF
+SAVED_INSTALL_DIR="${INSTALL_DIR}"
+EOF
+    chmod 600 "${DEPLOY_ENV_FILE}" 2>/dev/null || true
+}
 
 # 编译前端 Vue 3 工程
 build_frontend() {
@@ -589,6 +652,7 @@ case "${COMMAND}" in
         enable_linux_ip_forward
         setup_service
         setup_nginx
+        save_deploy_env
 
         echo -e "\n${GREEN}===========================================================================${NC}"
         echo -e "${GREEN}🎉 面壁者转发 (Wallfacer Forwarder) 一键部署完成！${NC}"
@@ -608,7 +672,16 @@ case "${COMMAND}" in
         ;;
 
     update)
-        info "正在执行一键热更新 (保留现有 config.yaml)..."
+        resolve_existing_install_dir
+        info "正在执行一键热更新 (目标目录: ${INSTALL_DIR}，完整保留现有 config.yaml)..."
+        cfg_backup=""
+        if [[ -f "${INSTALL_DIR}/config.yaml" ]]; then
+            cfg_backup="$(mktemp /tmp/wallfacer_cfg_XXXXXX)"
+            cp -f "${INSTALL_DIR}/config.yaml" "${cfg_backup}"
+            success "已锁定并备份现有配置文件: ${INSTALL_DIR}/config.yaml"
+        else
+            warn "在 ${INSTALL_DIR} 下未检测到现有 config.yaml，若您安装在其他目录请通过 --dir 指定"
+        fi
         build_frontend
         build_backend "${OS_TYPE}" "${ARCH_TYPE}" "${BACKEND_DIR}/wallfacer-backend"
         mkdir -p "${INSTALL_DIR}/frontend"
@@ -618,11 +691,18 @@ case "${COMMAND}" in
             rm -rf "${INSTALL_DIR}/frontend/dist"
             cp -R "${FRONTEND_DIR}/dist" "${INSTALL_DIR}/frontend/dist"
         fi
+        if [[ -n "${cfg_backup}" ]] && [[ -f "${cfg_backup}" ]]; then
+            cp -f "${cfg_backup}" "${INSTALL_DIR}/config.yaml"
+            chmod 600 "${INSTALL_DIR}/config.yaml"
+            rm -f "${cfg_backup}"
+        fi
+        save_deploy_env
         setup_service
-        success "程序更新并重启完成！"
+        success "程序热更新并重启完成！当前生效配置: ${INSTALL_DIR}/config.yaml"
         ;;
 
     unlock|restart)
+        resolve_existing_install_dir
         info "正在重启服务（自动清零所有账号的登录失败锁定状态）..."
         if [[ "${OS_TYPE}" == "linux" ]] && command -v systemctl >/dev/null 2>&1; then
             systemctl restart "${SERVICE_NAME}"
@@ -672,4 +752,3 @@ case "${COMMAND}" in
         success "系统服务已移除（安装目录 ${INSTALL_DIR} 与配置文件已保留，如需彻底删除请执行: sudo rm -rf ${INSTALL_DIR}）"
         ;;
 esac
-

@@ -11,6 +11,7 @@ backend/wallfacer-backend
 backend/wallfacer-backend-darwin-*
 backend/local_store.json
 .mysql84_credentials
+.deploy_env
 *.log
 
 # Legacy prototype files
