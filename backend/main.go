@@ -57,9 +57,11 @@ func main() {
 	}()
 
 	candidates := []string{
+		filepath.Join(exeDir, "frontend", "dist"),
 		filepath.Join(exeDir, "..", "frontend", "dist"),
 		filepath.Join("..", "frontend", "dist"),
 		filepath.Join("frontend", "dist"),
+		filepath.Join(exeDir, "frontend"),
 		filepath.Join(exeDir, "..", "frontend"),
 		filepath.Join("..", "frontend"),
 		"./frontend",

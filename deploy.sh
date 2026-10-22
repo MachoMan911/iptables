@@ -13,6 +13,42 @@
 
 set -euo pipefail
 
+# 恢复用户完整 Shell 环境变量（解决 sudo 強制重置 PATH 为 /sbin:/bin:/usr/sbin:/usr/bin
+# 或覆盖 nvm / 宝塔 / 自定义 Node.js 与 Go 路径，导致调到系统旧版 /usr/bin/node 报错的问题）
+load_user_env() {
+    set +eu
+    local real_home="${HOME:-/root}"
+    if [[ -n "${SUDO_USER:-}" ]] && [[ "${SUDO_USER}" != "root" ]]; then
+        real_home="$(eval echo "~${SUDO_USER}" 2>/dev/null || echo "/root")"
+    fi
+    [[ -f /etc/profile ]] && source /etc/profile >/dev/null 2>&1
+    [[ -f "${real_home}/.bash_profile" ]] && source "${real_home}/.bash_profile" >/dev/null 2>&1
+    [[ -f "${real_home}/.bashrc" ]] && source "${real_home}/.bashrc" >/dev/null 2>&1
+    [[ -f /root/.bash_profile ]] && source /root/.bash_profile >/dev/null 2>&1
+    [[ -f /root/.bashrc ]] && source /root/.bashrc >/dev/null 2>&1
+
+    export NVM_DIR="${NVM_DIR:-/root/.nvm}"
+    [[ -s "${NVM_DIR}/nvm.sh" ]] && source "${NVM_DIR}/nvm.sh" >/dev/null 2>&1
+
+    # 自动探测 nvm / 宝塔 / 常见高版本 Node.js 目录并置于 PATH 最前，防止被 /usr/bin 或 /usr/local/bin 下的旧版 node 抢占
+    local node_dirs=()
+    for d in /root/.nvm/versions/node/*/bin "${real_home}"/.nvm/versions/node/*/bin /www/server/nodejs/*/bin /www/server/nvm/versions/node/*/bin /usr/local/node*/bin; do
+        if [[ -x "${d}/node" ]]; then
+            node_dirs+=("${d}")
+        fi
+    done
+    if [[ ${#node_dirs[@]} -gt 0 ]]; then
+        local latest_node_bin
+        latest_node_bin="$(printf '%s\n' "${node_dirs[@]}" | sort -V | tail -n 1)"
+        export PATH="${latest_node_bin}:${PATH}"
+    fi
+
+    # 将 Go 常见安装路径追加到 PATH 末尾（绝不把 /usr/local/bin 放到 PATH 最前面覆盖用户环境）
+    export PATH="${PATH}:/usr/local/go/bin:/www/server/go/bin:/root/go/bin:/opt/homebrew/bin"
+    set -eu
+}
+load_user_env
+
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -165,20 +201,66 @@ done
 # 编译前端 Vue 3 工程
 build_frontend() {
     if [[ -d "${FRONTEND_DIR}" ]] && command -v npm >/dev/null 2>&1; then
-        info "正在编译 Vue 3 前端静态资源 (frontend/dist)..."
-        (
+        info "正在编译 Vue 3 前端静态资源 (Node: $(command -v node) $(node -v 2>/dev/null || true))..."
+        if (
             cd "${FRONTEND_DIR}"
             if [[ ! -d "node_modules" ]]; then
                 npm install --no-audit --no-fund
             fi
             npm run build
-        )
-        success "前端静态资源编译完成: ${FRONTEND_DIR}/dist"
-    elif [[ -f "${FRONTEND_DIR}/dist/index.html" ]]; then
-        info "未检测到 npm，直接复用已有的前端编译产物: ${FRONTEND_DIR}/dist"
-    else
-        warn "未检测到 npm 且不存在 frontend/dist，请先在开发机执行 npm run build"
+        ); then
+            success "前端静态资源编译完成: ${FRONTEND_DIR}/dist"
+            return 0
+        elif [[ -f "${FRONTEND_DIR}/dist/index.html" ]]; then
+            warn "前端重新编译未通过，自动复用已有的编译产物: ${FRONTEND_DIR}/dist"
+            return 0
+        fi
     fi
+
+    if [[ -f "${FRONTEND_DIR}/dist/index.html" ]]; then
+        info "直接复用已有的前端编译产物: ${FRONTEND_DIR}/dist"
+    else
+        warn "未检测到可用的前端编译产物 frontend/dist"
+    fi
+}
+
+# 自动安装 Go 编译环境（当未找到预编译二进制且系统未安装 Go 时触发）
+auto_install_go() {
+    if command -v go >/dev/null 2>&1; then
+        return 0
+    fi
+    info "当前系统未检测到 Go 编译器，正在为您自动安装 Go 1.22 环境..."
+    local go_tar="go1.22.8.${OS_TYPE}-${ARCH_TYPE}.tar.gz"
+    local dl_urls=(
+        "https://golang.google.cn/dl/${go_tar}"
+        "https://mirrors.aliyun.com/golang/${go_tar}"
+        "https://go.dev/dl/${go_tar}"
+    )
+    local tmp_tar="/tmp/${go_tar}"
+    for url in "${dl_urls[@]}"; do
+        if curl -fsSL --connect-timeout 10 -m 120 "${url}" -o "${tmp_tar}" 2>/dev/null || wget -q --timeout=15 "${url}" -O "${tmp_tar}" 2>/dev/null; then
+            if [[ -s "${tmp_tar}" ]]; then
+                rm -rf /usr/local/go
+                tar -C /usr/local -xzf "${tmp_tar}"
+                rm -f "${tmp_tar}"
+                export PATH="/usr/local/go/bin:${PATH}"
+                if command -v go >/dev/null 2>&1; then
+                    success "已自动安装 Go 环境: $(go version)"
+                    return 0
+                fi
+            fi
+        fi
+    done
+
+    # 若官方二进制包下载失败，回退使用系统包管理器安装
+    if command -v dnf >/dev/null 2>&1; then
+        dnf install -y golang && return 0
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y golang && return 0
+    elif command -v apt-get >/dev/null 2>&1; then
+        apt-get update -y && apt-get install -y golang-go && return 0
+    fi
+    return 1
 }
 
 # 编译后端 Go 二进制文件
@@ -186,26 +268,46 @@ build_backend() {
     local target_os="${1:-${OS_TYPE}}"
     local target_arch="${2:-${ARCH_TYPE}}"
     local output_bin="${3:-${BACKEND_DIR}/wallfacer-backend}"
+    local prebuilt_bin="${BACKEND_DIR}/wallfacer-backend-${target_os}-${target_arch}"
 
-    if command -v go >/dev/null 2>&1; then
-        info "正在编译 Go 后端二进制文件 (${target_os}/${target_arch})..."
-        (
-            cd "${BACKEND_DIR}"
-            go mod tidy
-            CGO_ENABLED=0 GOOS="${target_os}" GOARCH="${target_arch}" \
-                go build -trimpath -ldflags="-s -w" -o "${output_bin}" .
-        )
+    # 1. 若未安装 Go 但存在对应架构的预编译二进制，直接复用
+    if ! command -v go >/dev/null 2>&1; then
+        if [[ -f "${prebuilt_bin}" ]]; then
+            if [[ "${prebuilt_bin}" != "${output_bin}" ]]; then
+                cp -f "${prebuilt_bin}" "${output_bin}"
+            fi
+            chmod +x "${output_bin}"
+            success "已直接复用预编译 Linux 二进制文件: $(basename "${prebuilt_bin}")"
+            return 0
+        elif [[ -f "${output_bin}" ]]; then
+            chmod +x "${output_bin}"
+            success "已直接复用现有二进制文件: ${output_bin}"
+            return 0
+        else
+            auto_install_go || error "自动安装 Go 环境失败，请手动执行 'yum install -y golang' 或 'apt install -y golang-go'"
+        fi
+    fi
+
+    # 2. 使用 Go 编译（自动配置国内/海外高可用 GOPROXY 加速依赖拉取）
+    info "正在编译 Go 后端二进制文件 (${target_os}/${target_arch}, $(go version 2>/dev/null || true))..."
+    if (
+        cd "${BACKEND_DIR}"
+        export GO111MODULE=on
+        export GOPROXY="${GOPROXY:-https://goproxy.cn,https://goproxy.io,direct}"
+        go mod tidy
+        CGO_ENABLED=0 GOOS="${target_os}" GOARCH="${target_arch}" \
+            go build -trimpath -ldflags="-s -w" -o "${output_bin}" .
+    ); then
         chmod +x "${output_bin}"
         success "Go 后端编译完成: ${output_bin}"
-    elif [[ -f "${output_bin}" ]]; then
-        info "未检测到 Go 编译器，直接复用已有的二进制文件: ${output_bin}"
+    elif [[ -f "${prebuilt_bin}" ]]; then
+        warn "本地 Go 编译未通过，自动回退使用预编译二进制: $(basename "${prebuilt_bin}")"
+        if [[ "${prebuilt_bin}" != "${output_bin}" ]]; then
+            cp -f "${prebuilt_bin}" "${output_bin}"
+        fi
         chmod +x "${output_bin}"
-    elif [[ -f "${BACKEND_DIR}/wallfacer-backend-${target_os}-${target_arch}" ]]; then
-        cp "${BACKEND_DIR}/wallfacer-backend-${target_os}-${target_arch}" "${output_bin}"
-        chmod +x "${output_bin}"
-        info "已复用预编译二进制: wallfacer-backend-${target_os}-${target_arch}"
     else
-        error "未检测到 Go 环境且未找到预编译二进制文件，请先安装 Go 1.21+ 或先运行 './deploy.sh build-linux'"
+        error "Go 后端编译失败，请检查网络或 Go 版本"
     fi
 }
 
@@ -447,6 +549,10 @@ case "${COMMAND}" in
             fi
         fi
         prompt_config
+        if [[ -n "${NGINX_DOMAIN}" ]] && command -v nginx >/dev/null 2>&1 && [[ "${SERVER_PORT}" == "80" ]]; then
+            warn "检测到同时启用了 Nginx (监听 80 端口) 与 --port 80，为避免端口冲突，已将 Go 后端内部端口调整为 8080（由 Nginx 对外监听 80 端口并反向代理）"
+            SERVER_PORT="8080"
+        fi
         build_frontend
         build_backend "${OS_TYPE}" "${ARCH_TYPE}" "${BACKEND_DIR}/wallfacer-backend"
 

@@ -1,5 +1,11 @@
+import crypto from "node:crypto";
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
+
+// 兼容 Node 16 等旧版本环境中缺少 crypto.getRandomValues 的问题
+if (typeof crypto.getRandomValues !== "function") {
+  crypto.getRandomValues = (arr) => crypto.randomFillSync(arr);
+}
 
 export default defineConfig({
   plugins: [vue()],

@@ -6,9 +6,9 @@
 # Node / Frontend dependencies
 frontend/node_modules/
 
-# Go compiled binaries & local runtime data
+# Go compiled local runtime binary & runtime data (Linux prebuilt binaries are tracked for zero-env deployment)
 backend/wallfacer-backend
-backend/wallfacer-backend-*
+backend/wallfacer-backend-darwin-*
 backend/local_store.json
 .mysql84_credentials
 *.log
