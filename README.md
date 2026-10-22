@@ -36,9 +36,11 @@ iptables-forwarder/
 ├── init.sql                         # 支持任意自定义数据库名的 MySQL 初始化建表脚本
 ├── README.md                        # 项目说明、一键部署、编译、配置与 Nginx 部署文档
 ├── backend/                         # Go 后端工程
-│   ├── go.mod                       # Go 模块定义
+│   ├── go.mod                       # Go 模块定义 (兼容 Go 1.18+)
 │   ├── config.yaml                  # 后端主配置文件（DIY 数据库名、端口、鉴权策略等）
 │   ├── main.go                      # Go 服务端启动入口
+│   ├── wallfacer-backend-linux-amd64 # 预编译 Linux x86_64 静态二进制（支持免环境直接部署）
+│   ├── wallfacer-backend-linux-arm64 # 预编译 Linux ARM64 静态二进制（支持免环境直接部署）
 │   └── internal/
 │       ├── config/config.go         # 配置文件加载与环境变量覆盖
 │       ├── model/models.go          # 数据模型与请求结构体定义
@@ -48,6 +50,7 @@ iptables-forwarder/
 │       ├── dns/watcher.go           # 定时域名解析检测与 IP 覆盖同步器
 │       └── handler/server.go        # RESTful API 路由、CORS 跨域与静态资源托管
 └── frontend/                        # Vue 3 前端工程 (Vite)
+    ├── dist/                        # 预编译前端生产静态资源（开箱即用）
     ├── package.json                 # 前端依赖与脚本
     ├── vite.config.js               # Vite 构建与开发期 /api 反向代理配置
     ├── index.html                   # 页面入口
@@ -63,7 +66,10 @@ iptables-forwarder/
 
 ## 三、一键部署脚本 (`deploy.sh`) 使用指南（推荐）
 
-项目根目录提供了开箱即用的一键编译与部署脚本 [`deploy.sh`](./deploy.sh)，可自动完成 **前端打包**、**Go 二进制编译（或复用预编译包）**、**随机生成 UUID 作为 `jwt_secret`**、**生成 `config.yaml`（含自定义数据库名）**、**开启 Linux 内核转发**、**注册并启动 `systemd` 服务**，以及 **可选生成 Nginx 配置**。
+项目根目录提供了开箱即用的一键编译与部署脚本 [`deploy.sh`](./deploy.sh)，具备以下自动化能力：
+- **自适应环境与免编译兜底**：自动加载系统与用户的 `nvm` / 宝塔 / 自定义 Node.js 与 Go 环境（解决 `sudo` 重置 `PATH` 的问题）；若服务器未安装 Go 或 Node.js，可直接复用仓库内置的预编译产物（`frontend/dist` 与 `wallfacer-backend-linux-amd64/arm64`）或自动安装 Go 环境。
+- **基于运行中进程的智能热更新 (`update`)**：执行 `sudo ./deploy.sh update` 时，无需重复传入 `--dir` 或数据库参数，脚本会自动通过当前正在运行的 `wallfacer-backend` 进程（读取 `/proc/<PID>/environ`、`exe`、`cwd` 及 `systemd` 单元）定位上次启动路径，并自动解析继承原 `config.yaml` 中的 MySQL 连接配置、监听端口与 `jwt_secret`。
+- **端口冲突自动规避**：若同时传入 `--port 80` 与 `--nginx-domain`，脚本检测到已安装 Nginx 时会自动将 Go 后端内部端口调整为 `8080`，由 Nginx 对外监听 `80` 端口并反向代理至后端。
 
 ```bash
 chmod +x deploy.sh
@@ -85,7 +91,7 @@ sudo ./deploy.sh install -y \
   --db-port 3306 \
   --db-user root \
   --db-pass 'YourMySQLPassword' \
-  --db-name 'my_custom_forwarder_db' \
+  --db-name 'wallfacer_forwarder' \
   --admin-user admin \
   --admin-pass 'Admin@2026!' \
   --nginx-domain forwarder.example.com
@@ -102,7 +108,7 @@ sudo ./deploy.sh install -y \
 # 在开发机一键交叉编译 Linux (amd64 + arm64) 二进制文件与前端 dist 静态目录
 ./deploy.sh build-linux
 
-# 保留现有 config.yaml 配置，重新编译更新前后端并重启服务
+# 智能热更新：自动从运行中进程识别上次安装路径与 MySQL 配置，保留现有 config.yaml 编译更新并重启服务
 sudo ./deploy.sh update
 
 # 密码连续输错 5 次被锁定时，一键重启服务立即清零锁定状态
@@ -141,7 +147,14 @@ sudo ./deploy_mysql84.sh install -y \
 # 5. 一键重置业务账号密码并输出新密码
 sudo ./deploy_mysql84.sh reset-password
 
-# 6. 也可在执行 deploy.sh 时附加 --with-mysql84 参数，连同 MySQL 8.4 与转发服务一次性全套部署
+# 6. 查看状态 / 日志 / 重启 / 停止 / 卸载
+sudo ./deploy_mysql84.sh status
+sudo ./deploy_mysql84.sh logs
+sudo ./deploy_mysql84.sh restart
+sudo ./deploy_mysql84.sh stop
+sudo ./deploy_mysql84.sh uninstall
+
+# 7. 也可在执行 deploy.sh 时附加 --with-mysql84 参数，连同 MySQL 8.4 与转发服务一次性全套部署
 sudo ./deploy.sh install -y --with-mysql84
 ```
 

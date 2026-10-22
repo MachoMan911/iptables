@@ -61,9 +61,19 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="${PROJECT_ROOT}/backend"
 FRONTEND_DIR="${PROJECT_ROOT}/frontend"
 DEPLOY_ENV_FILE="${PROJECT_ROOT}/.deploy_env"
-CLI_DIR_SET="false"
 
-# 若已记录过上次部署目录，优先读取作为默认 INSTALL_DIR
+CLI_DIR_SET="false"
+CLI_PORT_SET="false"
+CLI_DB_HOST_SET="false"
+CLI_DB_PORT_SET="false"
+CLI_DB_USER_SET="false"
+CLI_DB_PASS_SET="false"
+CLI_DB_NAME_SET="false"
+CLI_ADMIN_USER_SET="false"
+CLI_ADMIN_PASS_SET="false"
+SAVED_JWT_SECRET=""
+
+# 若已记录过上次部署状态，读取作为初始候选值
 if [[ -f "${DEPLOY_ENV_FILE}" ]]; then
     # shellcheck disable=SC1090
     source "${DEPLOY_ENV_FILE}"
@@ -194,14 +204,14 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -y|--yes)           NON_INTERACTIVE="true"; shift ;;
         --dir)              INSTALL_DIR="$2"; CLI_DIR_SET="true"; shift 2 ;;
-        --port)             SERVER_PORT="$2"; shift 2 ;;
-        --db-host)          MYSQL_HOST="$2"; shift 2 ;;
-        --db-port)          MYSQL_PORT="$2"; shift 2 ;;
-        --db-user)          MYSQL_USER="$2"; shift 2 ;;
-        --db-pass)          MYSQL_PASSWORD="$2"; shift 2 ;;
-        --db-name)          MYSQL_DATABASE="$2"; shift 2 ;;
-        --admin-user)       ADMIN_USER="$2"; shift 2 ;;
-        --admin-pass)       ADMIN_PASSWORD="$2"; shift 2 ;;
+        --port)             SERVER_PORT="$2"; CLI_PORT_SET="true"; shift 2 ;;
+        --db-host)          MYSQL_HOST="$2"; CLI_DB_HOST_SET="true"; shift 2 ;;
+        --db-port)          MYSQL_PORT="$2"; CLI_DB_PORT_SET="true"; shift 2 ;;
+        --db-user)          MYSQL_USER="$2"; CLI_DB_USER_SET="true"; shift 2 ;;
+        --db-pass)          MYSQL_PASSWORD="$2"; CLI_DB_PASS_SET="true"; shift 2 ;;
+        --db-name)          MYSQL_DATABASE="$2"; CLI_DB_NAME_SET="true"; shift 2 ;;
+        --admin-user)       ADMIN_USER="$2"; CLI_ADMIN_USER_SET="true"; shift 2 ;;
+        --admin-pass)       ADMIN_PASSWORD="$2"; CLI_ADMIN_PASS_SET="true"; shift 2 ;;
         --nginx-domain)     NGINX_DOMAIN="$2"; shift 2 ;;
         --with-mysql84)     WITH_MYSQL84="true"; shift ;;
         -h|--help)          usage; exit 0 ;;
@@ -209,48 +219,150 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# 自动探测已部署的真实安装目录（解决执行 sudo ./deploy.sh update 未传 --dir 时误回退到默认 /opt/wallfacer 导致丢失原 config.yaml 的问题）
-resolve_existing_install_dir() {
-    if [[ "${CLI_DIR_SET}" == "true" ]]; then
-        return 0
+# 从 YAML 配置文件中安全提取指定段落的键值（兼容带引号及含 #/@ 等特殊符号的密码）
+yaml_get() {
+    local file="$1"
+    local section="$2"
+    local key="$3"
+    [[ -f "${file}" ]] || return 0
+    awk -v sec="${section}" -v k="${key}" '
+        /^[a-zA-Z0-9_]+:[[:space:]]*$/ {
+            line = $0
+            sub(/:[[:space:]]*$/, "", line)
+            cur_sec = line
+            next
+        }
+        cur_sec == sec {
+            if (match($0, "^[[:space:]]+" k ":[[:space:]]*")) {
+                val = substr($0, RLENGTH + 1)
+                if (substr(val, 1, 1) == "\"") {
+                    sub(/^"/, "", val)
+                    sub(/"[[:space:]]*$/, "", val)
+                } else if (substr(val, 1, 1) == "\x27") {
+                    sub(/^\x27/, "", val)
+                    sub(/\x27[[:space:]]*$/, "", val)
+                } else {
+                    sub(/[[:space:]]+#.*$/, "", val)
+                    sub(/[[:space:]]+$/, "", val)
+                }
+                print val
+                exit
+            }
+        }
+    ' "${file}"
+}
+
+# 解析指定 config.yaml 中的服务配置与 MySQL 配置
+load_config_from_yaml() {
+    local cfg_file="$1"
+    [[ -f "${cfg_file}" ]] || return 0
+
+    local v_host v_port v_jwt v_db_host v_db_port v_db_user v_db_pass v_db_name v_adm_user v_adm_pass v_dns_int
+    v_host="$(yaml_get "${cfg_file}" "server" "host")"
+    v_port="$(yaml_get "${cfg_file}" "server" "port")"
+    v_jwt="$(yaml_get "${cfg_file}" "server" "jwt_secret")"
+    v_db_host="$(yaml_get "${cfg_file}" "mysql" "host")"
+    v_db_port="$(yaml_get "${cfg_file}" "mysql" "port")"
+    v_db_user="$(yaml_get "${cfg_file}" "mysql" "user")"
+    v_db_pass="$(yaml_get "${cfg_file}" "mysql" "password")"
+    v_db_name="$(yaml_get "${cfg_file}" "mysql" "database")"
+    v_adm_user="$(yaml_get "${cfg_file}" "auth" "initial_admin_user")"
+    v_adm_pass="$(yaml_get "${cfg_file}" "auth" "initial_admin_password")"
+    v_dns_int="$(yaml_get "${cfg_file}" "dns_watcher" "interval_seconds")"
+
+    [[ -n "${v_host}" ]] && SERVER_HOST="${v_host}"
+    [[ "${CLI_PORT_SET}" != "true" && -n "${v_port}" ]] && SERVER_PORT="${v_port}"
+    [[ -n "${v_jwt}" ]] && SAVED_JWT_SECRET="${v_jwt}"
+    [[ "${CLI_DB_HOST_SET}" != "true" && -n "${v_db_host}" ]] && MYSQL_HOST="${v_db_host}"
+    [[ "${CLI_DB_PORT_SET}" != "true" && -n "${v_db_port}" ]] && MYSQL_PORT="${v_db_port}"
+    [[ "${CLI_DB_USER_SET}" != "true" && -n "${v_db_user}" ]] && MYSQL_USER="${v_db_user}"
+    [[ "${CLI_DB_PASS_SET}" != "true" && -n "${v_db_pass}" ]] && MYSQL_PASSWORD="${v_db_pass}"
+    [[ "${CLI_DB_NAME_SET}" != "true" && -n "${v_db_name}" ]] && MYSQL_DATABASE="${v_db_name}"
+    [[ "${CLI_ADMIN_USER_SET}" != "true" && -n "${v_adm_user}" ]] && ADMIN_USER="${v_adm_user}"
+    [[ "${CLI_ADMIN_PASS_SET}" != "true" && -n "${v_adm_pass}" ]] && ADMIN_PASSWORD="${v_adm_pass}"
+    [[ -n "${v_dns_int}" ]] && DNS_INTERVAL="${v_dns_int}"
+
+    info "已从现有配置 (${cfg_file}) 读取 MySQL 配置: ${MYSQL_USER}@${MYSQL_HOST}:${MYSQL_PORT}/${MYSQL_DATABASE} (监听端口: ${SERVER_PORT})"
+}
+
+# 根据正在运行的 wallfacer-backend 进程 (/proc/<pid>/exe、cwd、environ) 及 systemd 服务自动探测上次启动路径与 MySQL 配置
+inspect_running_process_and_config() {
+    local pid=""
+    local proc_cfg=""
+    local proc_dir=""
+
+    # 1. 优先通过 systemd MainPID 或 pgrep 查找正在运行的 wallfacer-backend 进程
+    if command -v systemctl >/dev/null 2>&1; then
+        pid="$(systemctl show -p MainPID --value "${SERVICE_NAME}" 2>/dev/null || true)"
+        [[ "${pid}" == "0" ]] && pid=""
     fi
-    # 1. 若当前 INSTALL_DIR 下已存在 config.yaml，直接使用
-    if [[ -f "${INSTALL_DIR}/config.yaml" ]]; then
-        return 0
+    if [[ -z "${pid}" ]] && command -v pgrep >/dev/null 2>&1; then
+        pid="$(pgrep -f "wallfacer-backend" 2>/dev/null | head -n 1 || true)"
     fi
-    # 2. 从 systemd 服务文件中提取 WorkingDirectory
-    local svc_file="/etc/systemd/system/${SERVICE_NAME}.service"
-    if [[ -f "${svc_file}" ]]; then
-        local wd
-        wd="$(grep -E '^WorkingDirectory=' "${svc_file}" | head -n 1 | cut -d'=' -f2- | tr -d '[:space:]' || true)"
-        if [[ -n "${wd}" ]] && [[ -f "${wd}/config.yaml" ]]; then
-            INSTALL_DIR="${wd}"
-            return 0
-        fi
-    fi
-    # 3. 从 Nginx 配置文件中反推安装目录 (root <INSTALL_DIR>/frontend/dist;)
-    for ng_cfg in /etc/nginx/conf.d/wallfacer.conf /etc/nginx/sites-enabled/wallfacer.conf; do
-        if [[ -f "${ng_cfg}" ]]; then
-            local ng_dir
-            ng_dir="$(awk '/root .*\/frontend\/dist;/{print $2}' "${ng_cfg}" | sed 's|/frontend/dist;||' | head -n 1 || true)"
-            if [[ -n "${ng_dir}" ]] && [[ -f "${ng_dir}/config.yaml" ]]; then
-                INSTALL_DIR="${ng_dir}"
-                return 0
+
+    if [[ -n "${pid}" ]]; then
+        if [[ -d "/proc/${pid}" ]]; then
+            # Linux: 从 /proc/<pid>/environ、exe、cwd 精确读取进程启动路径和 CONFIG_PATH
+            proc_cfg="$(tr '\0' '\n' < "/proc/${pid}/environ" 2>/dev/null | awk -F= '/^CONFIG_PATH=/{print substr($0, 13); exit}' || true)"
+            local proc_exe proc_cwd
+            proc_exe="$(readlink -f "/proc/${pid}/exe" 2>/dev/null | sed 's/ (deleted)$//' || true)"
+            proc_cwd="$(readlink -f "/proc/${pid}/cwd" 2>/dev/null || true)"
+
+            if [[ -n "${proc_cfg}" ]] && [[ -f "${proc_cfg}" ]]; then
+                proc_dir="$(dirname "${proc_cfg}")"
+            elif [[ -n "${proc_exe}" ]] && [[ -f "$(dirname "${proc_exe}")/config.yaml" ]]; then
+                proc_dir="$(dirname "${proc_exe}")"
+                proc_cfg="${proc_dir}/config.yaml"
+            elif [[ -n "${proc_cwd}" ]] && [[ -f "${proc_cwd}/config.yaml" ]]; then
+                proc_dir="${proc_cwd}"
+                proc_cfg="${proc_cwd}/config.yaml"
+            elif [[ -n "${proc_exe}" ]] && [[ "$(dirname "${proc_exe}")" != "${BACKEND_DIR}" ]]; then
+                proc_dir="$(dirname "${proc_exe}")"
+            fi
+        else
+            # macOS / BSD: 通过 ps 与 lsof 获取进程路径
+            local cmd_bin
+            cmd_bin="$(ps -p "${pid}" -o comm= 2>/dev/null | awk '{print $1}' || true)"
+            if [[ -n "${cmd_bin}" ]] && [[ "${cmd_bin}" == /* ]] && [[ "$(dirname "${cmd_bin}")" != "${BACKEND_DIR}" ]]; then
+                proc_dir="$(dirname "${cmd_bin}")"
+                [[ -f "${proc_dir}/config.yaml" ]] && proc_cfg="${proc_dir}/config.yaml"
             fi
         fi
-    done
-    # 4. 扫描常见自定义安装路径（如 /wwww/wallfacer、/www/wallfacer、/opt/wallfacer）
-    for cand in /wwww/wallfacer /www/wallfacer /opt/wallfacer /home/wallfacer /usr/local/wallfacer; do
-        if [[ -f "${cand}/config.yaml" ]]; then
-            INSTALL_DIR="${cand}"
-            return 0
+
+        if [[ -n "${proc_dir}" ]] && [[ "${CLI_DIR_SET}" != "true" ]]; then
+            INSTALL_DIR="${proc_dir}"
+            info "已通过运行中进程 (PID: ${pid}) 自动定位上次启动路径: ${INSTALL_DIR}"
         fi
-    done
-    local found_cfg
-    found_cfg="$(find / -maxdepth 3 -path "*/wallfacer/config.yaml" 2>/dev/null | head -n 1 || true)"
-    if [[ -n "${found_cfg}" ]]; then
-        INSTALL_DIR="$(dirname "${found_cfg}")"
-        return 0
+    fi
+
+    # 2. 若进程当前未运行，从 systemd 服务单元配置 (CONFIG_PATH / WorkingDirectory / ExecStart) 提取上次启动路径
+    if [[ -z "${proc_dir}" ]] && [[ "${CLI_DIR_SET}" != "true" ]]; then
+        local svc_file="/etc/systemd/system/${SERVICE_NAME}.service"
+        if [[ -f "${svc_file}" ]]; then
+            local svc_cfg svc_wd svc_exec
+            svc_cfg="$(sed -n 's/.*CONFIG_PATH=\([^" ]*\).*/\1/p' "${svc_file}" | head -n 1 || true)"
+            svc_wd="$(awk -F= '/^WorkingDirectory=/{print $2; exit}' "${svc_file}" | tr -d '[:space:]' || true)"
+            svc_exec="$(awk -F= '/^ExecStart=/{print $2; exit}' "${svc_file}" | awk '{print $1}' || true)"
+
+            if [[ -n "${svc_cfg}" ]] && [[ -f "${svc_cfg}" ]]; then
+                INSTALL_DIR="$(dirname "${svc_cfg}")"
+                proc_cfg="${svc_cfg}"
+            elif [[ -n "${svc_wd}" ]] && [[ -d "${svc_wd}" ]]; then
+                INSTALL_DIR="${svc_wd}"
+                [[ -f "${svc_wd}/config.yaml" ]] && proc_cfg="${svc_wd}/config.yaml"
+            elif [[ -n "${svc_exec}" ]]; then
+                INSTALL_DIR="$(dirname "${svc_exec}")"
+            fi
+            info "已从 systemd 服务单元识别上次启动路径: ${INSTALL_DIR}"
+        fi
+    fi
+
+    # 3. 自动加载对应路径下 config.yaml 中的 MySQL 配置与服务端口信息
+    if [[ -z "${proc_cfg}" ]] && [[ -f "${INSTALL_DIR}/config.yaml" ]]; then
+        proc_cfg="${INSTALL_DIR}/config.yaml"
+    fi
+    if [[ -n "${proc_cfg}" ]] && [[ -f "${proc_cfg}" ]]; then
+        load_config_from_yaml "${proc_cfg}"
     fi
 }
 
@@ -419,8 +531,7 @@ prompt_config() {
 # 生成 config.yaml
 write_config_file() {
     local cfg_file="$1"
-    local jwt_uuid
-    jwt_uuid="$(generate_uuid)"
+    local jwt_uuid="${SAVED_JWT_SECRET:-$(generate_uuid)}"
 
     cat > "${cfg_file}" <<EOF
 # 面壁者转发 - Go 后端配置文件
@@ -601,6 +712,7 @@ case "${COMMAND}" in
         if [[ "${OS_TYPE}" == "linux" ]] && [[ "${EUID}" -ne 0 ]]; then
             error "在 Linux 上安装并配置 iptables / systemd 需要 root 权限，请使用: sudo ./deploy.sh"
         fi
+        inspect_running_process_and_config
         if [[ "${WITH_MYSQL84}" == "true" ]] && [[ -f "${PROJECT_ROOT}/deploy_mysql84.sh" ]]; then
             info "正在调用 deploy_mysql84.sh 一键部署 MySQL 8.4 LTS..."
             bash "${PROJECT_ROOT}/deploy_mysql84.sh" install -y --db-name "${MYSQL_DATABASE}"
@@ -672,15 +784,15 @@ case "${COMMAND}" in
         ;;
 
     update)
-        resolve_existing_install_dir
-        info "正在执行一键热更新 (目标目录: ${INSTALL_DIR}，完整保留现有 config.yaml)..."
+        inspect_running_process_and_config
+        info "正在执行一键热更新 (目标目录: ${INSTALL_DIR}，完整保留现有配置与 MySQL 连接信息)..."
         cfg_backup=""
         if [[ -f "${INSTALL_DIR}/config.yaml" ]]; then
             cfg_backup="$(mktemp /tmp/wallfacer_cfg_XXXXXX)"
             cp -f "${INSTALL_DIR}/config.yaml" "${cfg_backup}"
-            success "已锁定并备份现有配置文件: ${INSTALL_DIR}/config.yaml"
+            success "已从运行进程关联路径锁定现有配置: ${INSTALL_DIR}/config.yaml"
         else
-            warn "在 ${INSTALL_DIR} 下未检测到现有 config.yaml，若您安装在其他目录请通过 --dir 指定"
+            warn "在 ${INSTALL_DIR} 下未检测到 config.yaml，将根据已识别的运行参数自动生成配置文件"
         fi
         build_frontend
         build_backend "${OS_TYPE}" "${ARCH_TYPE}" "${BACKEND_DIR}/wallfacer-backend"
@@ -695,14 +807,16 @@ case "${COMMAND}" in
             cp -f "${cfg_backup}" "${INSTALL_DIR}/config.yaml"
             chmod 600 "${INSTALL_DIR}/config.yaml"
             rm -f "${cfg_backup}"
+        elif [[ ! -f "${INSTALL_DIR}/config.yaml" ]]; then
+            write_config_file "${INSTALL_DIR}/config.yaml"
         fi
         save_deploy_env
         setup_service
-        success "程序热更新并重启完成！当前生效配置: ${INSTALL_DIR}/config.yaml"
+        success "程序热更新并重启完成！生效路径: ${INSTALL_DIR}/config.yaml (MySQL: ${MYSQL_USER}@${MYSQL_HOST}:${MYSQL_PORT}/${MYSQL_DATABASE})"
         ;;
 
     unlock|restart)
-        resolve_existing_install_dir
+        inspect_running_process_and_config
         info "正在重启服务（自动清零所有账号的登录失败锁定状态）..."
         if [[ "${OS_TYPE}" == "linux" ]] && command -v systemctl >/dev/null 2>&1; then
             systemctl restart "${SERVICE_NAME}"
@@ -713,6 +827,7 @@ case "${COMMAND}" in
         ;;
 
     stop)
+        inspect_running_process_and_config
         if [[ "${OS_TYPE}" == "linux" ]] && command -v systemctl >/dev/null 2>&1; then
             systemctl stop "${SERVICE_NAME}"
         else
@@ -730,6 +845,7 @@ case "${COMMAND}" in
         ;;
 
     logs)
+        inspect_running_process_and_config
         if [[ "${OS_TYPE}" == "linux" ]] && command -v journalctl >/dev/null 2>&1; then
             journalctl -u "${SERVICE_NAME}" -f -n 100
         elif [[ -f "${INSTALL_DIR}/wallfacer.log" ]]; then
