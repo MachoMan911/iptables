@@ -201,18 +201,18 @@
               <tr v-for="r in rules" :key="r.id">
                 <td data-label="规则名称 / 协议">
                   <div class="cell-content">
-                    <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;flex-wrap:wrap;">
+                    <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;white-space:nowrap;">
                       <span class="mono" style="color:var(--text-muted);font-size:12px;">#{{ r.id }}</span>
-                      <strong style="font-size:13.5px;word-break:break-word;">{{ r.name }}</strong>
+                      <strong style="font-size:13.5px;">{{ r.name }}</strong>
                     </div>
                     <span class="badge badge-blue mono">{{ r.protocol.toUpperCase() }}</span>
                   </div>
                 </td>
                 <td data-label="本机监听 → 目标">
                   <div class="cell-content">
-                    <div class="mono" style="font-size:13px;font-weight:600;word-break:break-all;">
+                    <div class="mono" style="font-size:13px;font-weight:600;white-space:nowrap;">
                       <span style="color:#60a5fa;">0.0.0.0:{{ r.listen_port }}</span>
-                      <span style="color:var(--text-muted);margin:0 4px;">&rarr;</span>
+                      <span style="color:var(--text-muted);margin:0 5px;">&rarr;</span>
                       <span>{{ r.target_host }}:{{ r.target_port }}</span>
                     </div>
                     <div style="margin-top:4px;">
@@ -223,14 +223,14 @@
                 </td>
                 <td data-label="生效 IP & SNAT">
                   <div class="cell-content">
-                    <div>
+                    <div style="white-space:nowrap;">
                       目标:
                       <span v-if="r.resolved_ip" class="mono" style="color:#34d399;font-weight:600;">
                         {{ r.resolved_ip }}:{{ r.target_port }}
                       </span>
                       <span v-else class="badge badge-red">解析失败</span>
                     </div>
-                    <div class="mono" style="font-size:11.5px;color:var(--text-muted);margin-top:4px;">
+                    <div class="mono" style="font-size:11.5px;color:var(--text-muted);margin-top:4px;white-space:nowrap;">
                       本机 SNAT: <span style="color:#cbd5e1;">{{ r.snat_ip || status.iptables.default_snat_ip || "-" }}</span>
                     </div>
                   </div>

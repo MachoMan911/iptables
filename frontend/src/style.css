@@ -378,27 +378,41 @@ th {
   color: var(--text-muted);
   font-weight: 600;
   font-size: 12px;
-  padding: 12px clamp(8px, 0.9vw, 14px);
+  padding: 12px clamp(8px, 0.9vw, 15px);
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
 
 td {
-  padding: 12px clamp(8px, 0.9vw, 14px);
+  padding: 13px clamp(8px, 0.9vw, 15px);
   border-bottom: 1px solid rgba(38, 53, 77, 0.65);
   vertical-align: middle;
-  white-space: normal;
+  white-space: nowrap;
 }
 
 .td-actions {
   text-align: right;
+  white-space: nowrap;
 }
 
 .rule-actions {
   display: inline-flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  align-items: center;
   justify-content: flex-end;
   gap: 5px;
+}
+
+@media (max-width: 1360px) and (min-width: 901px) {
+  th,
+  td {
+    padding: 11px 7px;
+    font-size: 12px;
+  }
+  .btn-sm {
+    padding: 4px 8px;
+    font-size: 11.5px;
+  }
 }
 
 .preview-header {
@@ -559,7 +573,7 @@ tbody tr:hover td {
 }
 
 /* ==================== H5 / 手机端 / 平板端 全分辨率自适应 ==================== */
-@media (max-width: 980px) {
+@media (max-width: 900px) {
   .table-responsive {
     overflow-x: visible;
     padding: 12px;
@@ -596,6 +610,7 @@ tbody tr:hover td {
     padding: 10px 2px;
     border-bottom: 1px dashed rgba(38, 53, 77, 0.6);
     text-align: right;
+    white-space: normal;
   }
 
   .responsive-table td:not(.empty-state):last-child {
@@ -621,6 +636,7 @@ tbody tr:hover td {
 
   .responsive-table .rule-actions {
     width: 100%;
+    flex-wrap: wrap;
     justify-content: flex-end;
   }
 }
