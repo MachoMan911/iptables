@@ -123,14 +123,14 @@ type activeListener struct {
 }
 
 type Manager struct {
-	mu              sync.Mutex
-	preroutingChain string
+	mu               sync.Mutex
+	preroutingChain  string
 	postroutingChain string
-	forwardChain    string
-	isLinux         bool
-	isMacOS         bool
-	iptablesBin     string
-	effectiveDryRun bool
+	forwardChain     string
+	isLinux          bool
+	isMacOS          bool
+	iptablesBin      string
+	effectiveDryRun  bool
 
 	ruleSpeeds        map[int][2]float64
 	lastChainCounters map[int][2]int64
@@ -687,4 +687,3 @@ func (m *Manager) GetStatus(activeRules []*model.ForwardRule) map[string]interfa
 		"commands_preview":   strings.Join(preview, "\n"),
 	}
 }
-

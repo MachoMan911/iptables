@@ -182,7 +182,7 @@
       <!-- Tab 1: 转发规则列表 -->
       <div v-show="activeTab === 'rules'" class="card">
         <div class="table-responsive">
-          <table>
+          <table class="responsive-table">
             <thead>
               <tr>
                 <th>规则名称 / 协议</th>
@@ -195,70 +195,82 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-if="rules.length === 0">
+              <tr v-if="rules.length === 0" class="empty-row">
                 <td colspan="7" class="empty-state">暂无转发规则，点击右上角「+ 新增转发规则」开始配置</td>
               </tr>
               <tr v-for="r in rules" :key="r.id">
-                <td>
-                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
-                    <span class="mono" style="color:var(--text-muted);font-size:12px;">#{{ r.id }}</span>
-                    <strong style="font-size:14px;">{{ r.name }}</strong>
-                  </div>
-                  <span class="badge badge-blue mono">{{ r.protocol.toUpperCase() }}</span>
-                </td>
-                <td>
-                  <div class="mono" style="font-size:13.5px;font-weight:600;">
-                    <span style="color:#60a5fa;">0.0.0.0:{{ r.listen_port }}</span>
-                    <span style="color:var(--text-muted);margin:0 6px;">&rarr;</span>
-                    <span>{{ r.target_host }}:{{ r.target_port }}</span>
-                  </div>
-                  <div style="margin-top:4px;">
-                    <span v-if="r.is_domain" class="badge badge-purple">域名动态解析</span>
-                    <span v-else class="badge badge-green">静态 IP</span>
+                <td data-label="规则名称 / 协议">
+                  <div class="cell-content">
+                    <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;flex-wrap:wrap;">
+                      <span class="mono" style="color:var(--text-muted);font-size:12px;">#{{ r.id }}</span>
+                      <strong style="font-size:13.5px;word-break:break-word;">{{ r.name }}</strong>
+                    </div>
+                    <span class="badge badge-blue mono">{{ r.protocol.toUpperCase() }}</span>
                   </div>
                 </td>
-                <td>
-                  <div>
-                    目标:
-                    <span v-if="r.resolved_ip" class="mono" style="color:#34d399;font-weight:600;">
-                      {{ r.resolved_ip }}:{{ r.target_port }}
-                    </span>
-                    <span v-else class="badge badge-red">解析失败</span>
-                  </div>
-                  <div class="mono" style="font-size:11.5px;color:var(--text-muted);margin-top:4px;">
-                    本机 SNAT: <span style="color:#cbd5e1;">{{ r.snat_ip || status.iptables.default_snat_ip || "-" }}</span>
-                  </div>
-                </td>
-                <td>
-                  <template v-if="r.enabled">
-                    <div class="mono" style="font-size:12.5px;color:#34d399;font-weight:600;">↑ {{ formatSpeed(r.up_speed) }}</div>
-                    <div class="mono" style="font-size:12.5px;color:#60a5fa;font-weight:600;">↓ {{ formatSpeed(r.down_speed) }}</div>
-                  </template>
-                  <span v-else class="mono" style="color:var(--text-muted);font-size:12px;">已停用 (0 B/s)</span>
-                </td>
-                <td>
-                  <div class="mono" style="font-size:12.5px;font-weight:600;color:var(--text);">
-                    总计: {{ formatBytes(r.total_bytes) }}
-                  </div>
-                  <div class="mono" style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">
-                    ↑ {{ formatBytes(r.up_bytes) }} &nbsp;|&nbsp; ↓ {{ formatBytes(r.down_bytes) }}
+                <td data-label="本机监听 → 目标">
+                  <div class="cell-content">
+                    <div class="mono" style="font-size:13px;font-weight:600;word-break:break-all;">
+                      <span style="color:#60a5fa;">0.0.0.0:{{ r.listen_port }}</span>
+                      <span style="color:var(--text-muted);margin:0 4px;">&rarr;</span>
+                      <span>{{ r.target_host }}:{{ r.target_port }}</span>
+                    </div>
+                    <div style="margin-top:4px;">
+                      <span v-if="r.is_domain" class="badge badge-purple">域名动态解析</span>
+                      <span v-else class="badge badge-green">静态 IP</span>
+                    </div>
                   </div>
                 </td>
-                <td>
-                  <span v-if="r.enabled" class="badge badge-green">已启用</span>
-                  <span v-else class="badge badge-yellow">已停用</span>
-                  <div v-if="r.last_error" style="color:#f87171;font-size:11.5px;margin-top:4px;" :title="r.last_error">
-                    异常: {{ r.last_error.slice(0, 22) }}
-                  </div>
-                  <div v-else-if="r.is_domain" style="font-size:11.5px;color:var(--text-muted);margin-top:4px;">
-                    检测: {{ formatTime(r.last_checked_at) }}
-                  </div>
-                  <div v-else style="font-size:11.5px;color:var(--text-muted);margin-top:4px;">
-                    直连静态 IPv4
+                <td data-label="生效 IP & SNAT">
+                  <div class="cell-content">
+                    <div>
+                      目标:
+                      <span v-if="r.resolved_ip" class="mono" style="color:#34d399;font-weight:600;">
+                        {{ r.resolved_ip }}:{{ r.target_port }}
+                      </span>
+                      <span v-else class="badge badge-red">解析失败</span>
+                    </div>
+                    <div class="mono" style="font-size:11.5px;color:var(--text-muted);margin-top:4px;">
+                      本机 SNAT: <span style="color:#cbd5e1;">{{ r.snat_ip || status.iptables.default_snat_ip || "-" }}</span>
+                    </div>
                   </div>
                 </td>
-                <td style="text-align: right;">
-                  <div style="display:inline-flex;gap:6px;">
+                <td data-label="实时上下行速度">
+                  <div class="cell-content">
+                    <template v-if="r.enabled">
+                      <div class="mono" style="font-size:12.5px;color:#34d399;font-weight:600;white-space:nowrap;">↑ {{ formatSpeed(r.up_speed) }}</div>
+                      <div class="mono" style="font-size:12.5px;color:#60a5fa;font-weight:600;white-space:nowrap;">↓ {{ formatSpeed(r.down_speed) }}</div>
+                    </template>
+                    <span v-else class="mono" style="color:var(--text-muted);font-size:12px;">已停用 (0 B/s)</span>
+                  </div>
+                </td>
+                <td data-label="累计流量统计">
+                  <div class="cell-content">
+                    <div class="mono" style="font-size:12.5px;font-weight:600;color:var(--text);white-space:nowrap;">
+                      总计: {{ formatBytes(r.total_bytes) }}
+                    </div>
+                    <div class="mono" style="font-size:11.5px;color:var(--text-muted);margin-top:2px;white-space:nowrap;">
+                      ↑ {{ formatBytes(r.up_bytes) }} | ↓ {{ formatBytes(r.down_bytes) }}
+                    </div>
+                  </div>
+                </td>
+                <td data-label="域名监控状态">
+                  <div class="cell-content">
+                    <span v-if="r.enabled" class="badge badge-green">已启用</span>
+                    <span v-else class="badge badge-yellow">已停用</span>
+                    <div v-if="r.last_error" style="color:#f87171;font-size:11.5px;margin-top:4px;" :title="r.last_error">
+                      异常: {{ r.last_error.slice(0, 22) }}
+                    </div>
+                    <div v-else-if="r.is_domain" style="font-size:11.5px;color:var(--text-muted);margin-top:4px;white-space:nowrap;">
+                      检测: {{ formatTime(r.last_checked_at) }}
+                    </div>
+                    <div v-else style="font-size:11.5px;color:var(--text-muted);margin-top:4px;">
+                      直连静态 IPv4
+                    </div>
+                  </div>
+                </td>
+                <td data-label="操作" class="td-actions">
+                  <div class="rule-actions">
                     <button v-if="r.is_domain" class="btn btn-outline btn-sm" @click="refreshRuleDns(r)">刷新解析</button>
                     <button class="btn btn-outline btn-sm" @click="toggleRule(r.id)">{{ r.enabled ? "停用" : "启用" }}</button>
                     <button class="btn btn-outline btn-sm" @click="openRuleModal(r)">编辑</button>
@@ -275,7 +287,7 @@
       <!-- Tab 2: 域名 IP 变更日志 -->
       <div v-show="activeTab === 'logs'" class="card">
         <div class="table-responsive">
-          <table>
+          <table class="responsive-table">
             <thead>
               <tr>
                 <th>记录 ID</th>
@@ -287,16 +299,16 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-if="dnsLogs.length === 0">
+              <tr v-if="dnsLogs.length === 0" class="empty-row">
                 <td colspan="6" class="empty-state">暂无域名解析 IP 变更记录</td>
               </tr>
               <tr v-for="l in dnsLogs" :key="l.id">
-                <td class="mono">#{{ l.id }}</td>
-                <td><strong>{{ l.rule_name }}</strong> <span style="color:var(--text-muted)">(Rule #{{ l.rule_id }})</span></td>
-                <td class="mono">{{ l.domain }}</td>
-                <td class="mono" style="color:var(--text-muted)">{{ l.old_ip || "首次解析" }}</td>
-                <td class="mono" style="color:#34d399;font-weight:700;">{{ l.new_ip }}</td>
-                <td>{{ formatTime(l.created_at) }}</td>
+                <td data-label="记录 ID" class="mono">#{{ l.id }}</td>
+                <td data-label="规则名称"><strong>{{ l.rule_name }}</strong> <span style="color:var(--text-muted)">(Rule #{{ l.rule_id }})</span></td>
+                <td data-label="目标域名" class="mono">{{ l.domain }}</td>
+                <td data-label="变更前 IP" class="mono" style="color:var(--text-muted)">{{ l.old_ip || "首次解析" }}</td>
+                <td data-label="变更后新 IP" class="mono" style="color:#34d399;font-weight:700;">{{ l.new_ip }}</td>
+                <td data-label="更新时间">{{ formatTime(l.created_at) }}</td>
               </tr>
             </tbody>
           </table>
@@ -305,7 +317,7 @@
 
       <!-- Tab 3: iptables 命令预览 -->
       <div v-show="activeTab === 'preview'" class="card">
-        <div style="padding: 16px 20px; display:flex; justify-content:space-between; align-items:center;">
+        <div class="preview-header">
           <div>
             <strong>当前生成的自定义链 iptables 转发指令</strong>
             <div style="font-size:12px; color:var(--text-muted); margin-top:2px;">
